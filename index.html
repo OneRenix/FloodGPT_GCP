@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FloodGPT</title>
+  <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  
+  <!-- jQuery & DataTables -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <link href="https://cdn.datatables.net/2.0.3/css/dataTables.tailwindcss.min.css" rel="stylesheet">
+  <script src="https://cdn.datatables.net/2.0.3/js/dataTables.min.js"></script>
+  <script src="https://cdn.datatables.net/2.0.3/js/dataTables.tailwindcss.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/showdown/2.1.0/showdown.min.js"></script>
+
+  <style>
+    /* Custom styles for DataTables dark theme */
+    .dataTables_wrapper {
+      color: #d1d5db;
+    }
+    #results-table thead th {
+      color: #e5e7eb;
+    }
+    .dataTables_length label, .dataTables_filter label, .dataTables_info {
+      color: #9ca3af !important;
+    }
+    .dataTables_length select, .dataTables_filter input {
+      background-color: #444654 !important;
+      border-color: #5a5c6d !important;
+      color: #d1d5db !important;
+    }
+    .dataTables_paginate .paginate_button {
+      color: #d1d5db !important;
+      border-color: #5a5c6d !important;
+    }
+    .dataTables_paginate .paginate_button.current, .dataTables_paginate .paginate_button.current:hover {
+      background: #10a37f !important;
+      color: white !important;
+      border-color: #10a37f !important;
+    }
+    .dataTables_paginate .paginate_button:hover {
+      background: #444654 !important;
+      border-color: #5a5c6d !important;
+    }
+    #results-table tr:hover td {
+      background-color: #4a4b5a;
+    }
+  </style>
+</head>
+<body class="bg-[#343541] text-gray-300 font-sans">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between px-6 py-4">
+    <h1 class="text-xl font-bold flex items-center space-x-2 text-white">
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-[#10a37f]"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+      <span>FloodGPT</span>
+    </h1>
+    <span class="text-sm text-gray-400">Data Insights. Instantly.</span>
+  </header>
+
+  <!-- Main -->
+  <main class="p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
+
+    <!-- Left Side: Query + Results -->
+    <div class="lg:col-span-3 space-y-6">
+      <!-- Query Input -->
+      <div class="bg-[#40414f] p-4 rounded-lg shadow-lg">
+        <label for="query-input" class="block mb-2 font-semibold text-gray-200">Ask FloodGPT</label>
+        <div class="flex space-x-2">
+          <input id="query-input" type="text" placeholder="Type your question here..."
+                 class="flex-1 px-3 py-2 rounded bg-[#444654] border border-gray-600 focus:outline-none focus:ring-2 focus:ring-[#10a37f] text-white"/>
+          <button id="submit-btn" onclick="submitQuery()"
+                  class="px-4 py-2 rounded bg-[#10a37f] hover:bg-[#12b891] text-white font-semibold transition">
+            Ask
+          </button>
+        </div>
+        <p id="status" class="mt-2 text-sm text-gray-400"></p>
+      </div>
+
+      <!-- Results Tabs -->
+      <div id="results-tabs" class="bg-[#40414f] p-4 rounded-lg shadow-lg hidden">
+        <div class="flex border-b border-gray-600 mb-4">
+          <button class="tab-button px-3 py-2 text-sm transition-colors" onclick="openTab(event, 'sql-tab')" title="Enter your data query here.">📝 Ask for Data</button> 
+          <button class="tab-button px-3 py-2 text-sm transition-colors" onclick="openTab(event, 'viz-tab')" title="See suggested chart types for your data.">📈 Suggested Chart</button>
+          <button class="tab-button px-3 py-2 text-sm transition-colors" onclick="openTab(event, 'chartjson-tab')" title="View the code to generate the chart.">📜 Chart's Recipe</button>
+          <button class="tab-button px-3 py-2 text-sm transition-colors" onclick="openTab(event, 'plotly-tab')" title="Display the generated chart.">🖼️ See the Chart</button>
+          <button class="tab-button px-3 py-2 text-sm transition-colors" onclick="openTab(event, 'data-tab')" title="View the query results in a table.">📊 Search Result</button>
+          <button class="tab-button px-3 py-2 text-sm transition-colors" onclick="openTab(event, 'explain-tab')" title="Get an explanation of the data.">💡 Explain & Enlighten</button>
+        </div>
+
+        <!-- Tab Content -->
+        <div id="sql-tab" class="tab-content hidden h-130 overflow-y-auto"><pre id="sql-query" class="whitespace-pre-wrap text-sm bg-[#343541] p-4 rounded-md"></pre></div>
+        <div id="data-tab" class="tab-content hidden p-2 h-130 overflow-y-auto">
+          <table id="results-table" class="display w-full text-sm"></table>
+        </div>
+        <div id="viz-tab" class="tab-content hidden h-130 overflow-y-auto"><pre id="viz-rec" class="whitespace-pre-wrap text-sm bg-[#343541] p-4 rounded-md"></pre></div>
+        <div id="chartjson-tab" class="tab-content hidden h-130 overflow-y-auto"><pre id="chart-json" class="whitespace-pre-wrap text-sm bg-[#343541] p-4 rounded-md"></pre></div>
+        <div id="plotly-tab" class="tab-content hidden h-160 overflow-y-auto">
+          <div id="plotly-chart" class="h-full w-full flex items-center justify-center text-gray-400 rounded-md bg-[#444654]">
+            <p class="mt-20">No chart yet.</p>
+          </div>
+        </div>
+        <div id="explain-tab" class="tab-content hidden h-130 overflow-y-auto"><div id="explain-content" class="prose prose-invert max-w-none p-4 rounded-md"></div></div>
+      </div>
+    </div>
+
+    <!-- Right Side: Accordion -->
+    <div class="lg:col-span-1 space-y-4">
+      <div class="bg-[#40414f] p-3 rounded-lg shadow-lg">
+        <div id="accordion" class="space-y-2 text-sm">
+          <!-- Accordion Header -->
+          <div class="border border-gray-600 rounded-lg">
+            <button class="accordion-btn w-full flex justify-between items-center px-3 py-2 hover:bg-gray-700/50 transition rounded-t-lg"
+                    onclick="toggleAccordion(this)">
+              <span class="flex items-center space-x-2 font-bold text-base text-gray-200">
+                <i data-lucide="lightbulb" class="w-4 h-4 text-orange-400"></i>
+                <span>Guided Queries</span>
+              </span>
+              <i data-lucide="chevron-down" class="w-4 h-4 transition-transform text-gray-400"></i>
+            </button>
+    
+            <!-- Accordion Content -->
+            <div class="accordion-content px-3 py-2 space-y-1 border-t border-gray-700 hidden">
+              <p class="text-gray-400 text-xs italic mb-1">
+                💡 Click a query below to auto-fill your question.
+              </p>
+    
+              <!-- Query List -->
+              <div class="space-y-1">
+                <button class="sample-query-btn group w-full text-left flex items-start space-x-2 p-1.5 rounded-md hover:bg-gray-700 transition"
+                        onclick="setSampleQuery(this.querySelector('span').textContent)">
+                  <i data-lucide="bar-chart-3" class="w-3.5 h-3.5 text-orange-400"></i>
+                  <span>Top 10 flood control projects by budget including contractor, implementing_office, contract cost and abc?</span>
+                </button>
+    
+                <button class="sample-query-btn group w-full text-left flex items-start space-x-2 p-1.5 rounded-md hover:bg-gray-700 transition"
+                        onclick="setSampleQuery(this.querySelector('span').textContent)">
+                  <i data-lucide="pie-chart" class="w-3.5 h-3.5 text-blue-400"></i>
+                  <span>Which regions have the highest total budget allocation?</span>
+                </button>
+    
+                <button class="sample-query-btn group w-full text-left flex items-start space-x-2 p-1.5 rounded-md hover:bg-gray-700 transition"
+                        onclick="setSampleQuery(this.querySelector('span').textContent)">
+                  <i data-lucide="award" class="w-3.5 h-3.5 text-yellow-400"></i>
+                  <span>Top 5 contractors with the highest total final CPES rating.</span>
+                </button>
+    
+                <button class="sample-query-btn group w-full text-left flex items-start space-x-2 p-1.5 rounded-md hover:bg-gray-700 transition"
+                        onclick="setSampleQuery(this.querySelector('span').textContent)">
+                  <i data-lucide="bar-chart" class="w-3.5 h-3.5 text-green-400"></i>
+                  <span>Top 5 Average CPES rating per contractor.</span>
+                </button>
+    
+                <button class="sample-query-btn group w-full text-left flex items-start space-x-2 p-1.5 rounded-md hover:bg-gray-700 transition"
+                        onclick="setSampleQuery(this.querySelector('span').textContent)">
+                  <i data-lucide="check-circle" class="w-3.5 h-3.5 text-teal-400"></i>
+                  <span>Which regions have the most completed projects?</span>
+                </button>
+    
+                <button class="sample-query-btn group w-full text-left flex items-start space-x-2 p-1.5 rounded-md hover:bg-gray-700 transition"
+                        onclick="setSampleQuery(this.querySelector('span').textContent)">
+                  <i data-lucide="clock-4" class="w-3.5 h-3.5 text-purple-400"></i>
+                  <span>Which top 5 contractors have the most delayed projects?</span>
+                </button>
+    
+                <button class="sample-query-btn group w-full text-left flex items-start space-x-2 p-1.5 rounded-md hover:bg-gray-700 transition"
+                        onclick="setSampleQuery(this.querySelector('span').textContent)">
+                  <i data-lucide="alert-octagon" class="w-3.5 h-3.5 text-red-400"></i>
+                  <span>Top 5 District Engineering Offices exceeding approved budgets (ABC)</span>
+                </button>
+
+                <button class="sample-query-btn group w-full text-left flex items-start space-x-2 p-1.5 rounded-md hover:bg-gray-700 transition"
+                        onclick="setSampleQuery(this.querySelector('span').textContent)">
+                  <i data-lucide="alert-octagon" class="w-3.5 h-3.5 text-red-400"></i>
+                  <span>Top 10 contractors with ongoing projects with highest contract cost</span>
+                </button>
+
+                <button class="sample-query-btn group w-full text-left flex items-start space-x-2 p-1.5 rounded-md hover:bg-gray-700 transition"
+                        onclick="setSampleQuery(this.querySelector('span').textContent)">
+                  <i data-lucide="trending-up" class="w-3.5 h-3.5 text-orange-400"></i>
+                  <span>Top 5 contractors with the most over-budget projects, including total cost, ABC, and % difference</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    
+  </main>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+    <div class="flex flex-col items-center">
+      <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-[#10a37f]"></div>
+      <p class="text-white mt-4">Processing your request...</p>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script>
+    function toggleAccordion(btn) {
+      const content = btn.nextElementSibling;
+      const icon = btn.querySelector("i");
+      content.classList.toggle("hidden");
+      icon.style.transform = content.classList.contains('hidden') ? 'rotate(0deg)' : 'rotate(180deg)';
+    }
+    lucide.createIcons();
+
+    function shortenLabel(label, maxLength = 20) {
+      if (typeof label !== 'string') return label;
+      if (label.length > maxLength) {
+        return label.substring(0, maxLength) + '...';
+      }
+      return label;
+    }
+
+    function setSampleQuery(text){
+      document.getElementById('query-input').value = text.trim();
+    }
+
+    function openTab(evt, tabName) {
+      document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.add('hidden');
+      });
+      document.querySelectorAll('.tab-button').forEach(btn => {
+        btn.classList.remove('active', 'text-white', 'border-[#10a37f]', 'border-b-2');
+        btn.classList.add('text-gray-400', 'border-transparent');
+      });
+      
+      document.getElementById(tabName).classList.remove('hidden');
+      
+      if(evt) {
+        evt.currentTarget.classList.add('active', 'text-white', 'border-b-2', 'border-[#10a37f]');
+        evt.currentTarget.classList.remove('text-gray-400', 'border-transparent');
+      }
+    }
+
+    function renderDataTable(dfData) {
+      if ($.fn.DataTable.isDataTable('#results-table')) {
+        $('#results-table').DataTable().destroy();
+        $('#results-table').empty();
+      }
+
+      if (!dfData || !dfData.columns || !dfData.data || dfData.data.length === 0) {
+        $('#results-table').html('<thead><tr><th class="text-gray-400">No data to display.</th></tr></thead>');
+        return;
+      }
+
+      const columns = dfData.columns.map(col => ({ title: col }));
+      
+      // Check for numeric columns to apply formatting
+      const columnDefs = [];
+      dfData.data[0].forEach((cell, index) => {
+        if (typeof cell === 'number') {
+          columnDefs.push({
+            targets: index,
+            render: function (data, type, row) {
+              if (type === 'display' && data !== null) {
+                return data.toLocaleString('en-US');
+              }
+              return data;
+            }
+          });
+        }
+      });
+
+      new DataTable('#results-table', {
+        data: dfData.data,
+        columns: columns,
+        columnDefs: columnDefs,
+        responsive: true,
+        layout: {
+            topStart: 'pageLength',
+            topEnd: 'search',
+            bottomStart: 'info',
+            bottomEnd: 'paging'
+        }
+      });
+    }
+
+    function resetResults() {
+      document.getElementById('sql-query').textContent = "";
+      if ($.fn.DataTable.isDataTable('#results-table')) {
+        $('#results-table').DataTable().destroy();
+        $('#results-table').empty();
+      }
+      document.getElementById('viz-rec').textContent = "";
+      document.getElementById('chart-json').textContent = "";
+      document.getElementById('plotly-chart').innerHTML = "<p class='text-gray-400 mt-20 text-center'>No chart yet.</p>";
+      document.getElementById('explain-content').textContent = "";
+    }
+
+    function submitQuery(){
+      const question = document.getElementById('query-input').value;
+      if(!question.trim()){ alert('Please enter a question.'); return; }
+
+      resetResults();
+      localStorage.setItem("pendingQuery", question);
+
+      document.getElementById('loading-overlay').classList.remove('hidden');
+      setTimeout(()=>{ window.location.reload(true); }, 300);
+    }
+
+    function runPendingQuery(){
+      const pending = localStorage.getItem("pendingQuery");
+      if(pending && pending.trim() !== ""){
+        document.getElementById('query-input').value = pending;
+        localStorage.removeItem("pendingQuery");
+        runAgent(pending);
+      }
+    }
+
+    function runAgent(question){
+      const statusDiv = document.getElementById('status');
+      const submitBtn = document.getElementById('submit-btn');
+      const loadingOverlay = document.getElementById('loading-overlay');
+      
+      submitBtn.disabled = true;
+      submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      loadingOverlay.classList.remove('hidden');
+      statusDiv.textContent = 'Agent is thinking...';
+
+      const eventSource = new EventSource(`/stream-agent?question=${encodeURIComponent(question)}`);
+      
+      eventSource.onmessage = function(event){
+        const resultsTabs = document.getElementById('results-tabs');
+        if (resultsTabs.classList.contains('hidden')) {
+          resultsTabs.classList.remove('hidden');
+          const firstButton = document.querySelector('.tab-button');
+          openTab({currentTarget: firstButton}, 'sql-tab');
+        }
+
+        const parsedEvent = JSON.parse(event.data);
+        const {event: nodeName, data: nodeOutput} = parsedEvent;
+
+        if(nodeName === 'validate_sql'){ 
+          statusDiv.textContent = 'SQL validated. Executing...'; 
+          document.getElementById('sql-query').textContent = nodeOutput.validated_sql; 
+        }
+        else if(nodeName === 'execute_sql'){ 
+          statusDiv.textContent = 'Query executed. Recommending visualization...'; 
+          renderDataTable(nodeOutput.sql_dataframe);
+        }
+        else if(nodeName === 'visualizer'){ 
+          statusDiv.textContent = 'Recommendation received. Formatting data...'; 
+          document.getElementById('viz-rec').textContent = `Recommended Chart Type: ${nodeOutput.visualization}`; 
+        }
+        else if(nodeName === 'formatter'){ 
+          statusDiv.textContent = 'Process complete!'; 
+          document.getElementById('chart-json').textContent = JSON.stringify(nodeOutput.formatted_data_for_visualization, null, 2); 
+          renderPlotly(nodeOutput); 
+        }
+        else if(nodeName === 'insight'){ 
+          statusDiv.textContent = 'Generating insights...'; 
+          const converter = new showdown.Converter();
+          const html = converter.makeHtml(nodeOutput.insight);
+          document.getElementById('explain-content').innerHTML = html; 
+        }
+        else if(nodeName === 'end' || nodeName === 'error'){ 
+          statusDiv.textContent = nodeName === 'error' ? `An error occurred: ${nodeOutput}` : 'Done!'; 
+          submitBtn.disabled = false;
+          submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+          loadingOverlay.classList.add('hidden');
+          eventSource.close(); 
+        }
+      };
+      
+      eventSource.onerror = function(err){ 
+        statusDiv.textContent = 'Connection to server failed.'; 
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        loadingOverlay.classList.add('hidden');
+        eventSource.close(); 
+      }
+    }
+
+    function renderPlotly(chartJsonWrapper){
+      let chartJson = chartJsonWrapper?.formatted_data_for_visualization || chartJsonWrapper;
+      if(chartJson.formatted_data_for_visualization) chartJson = chartJson.formatted_data_for_visualization;
+      
+      let type = (chartJson.type || 'none').toLowerCase();
+      let orientation = 'v';
+
+      if(type === 'none'){
+        document.getElementById('plotly-chart').innerHTML="<p class='text-gray-400 text-center mt-20'>No visualization available.</p>";
+        return;
+      }
+      if(type === 'horizontal_bar'){
+        type = 'bar'; 
+        orientation = 'h';
+      }
+      if(!chartJson.data || !Array.isArray(chartJson.data.labels) || !Array.isArray(chartJson.data.values)){
+        document.getElementById('plotly-chart').innerHTML="<p class='text-red-400 text-center mt-20'>Invalid chart data format.</p>"; 
+        return;
+      }
+
+      let traces = [];
+      const colors = ['#4285F4', '#DB4437', '#F4B400', '#0F9D58', '#AB47BC', '#00ACC1', '#FF7043', '#9E9D24', '#5C6BC0', '#8E24AA'];
+      
+      if (chartJson.data.labels) {
+        chartJson.data.labels = chartJson.data.labels.map(label => shortenLabel(label));
+      }
+
+      if(type === 'pie'){
+        traces = [{
+          labels: chartJson.data.labels,
+          values: chartJson.data.values[0].data,
+          type: 'pie',
+          textinfo: 'label+percent',
+          marker: { colors: colors },
+          hoverinfo: 'label+percent+value'
+        }];
+      } else {
+        chartJson.data.values.forEach((series, idx) => { 
+          const trace = {
+            x: orientation === 'v' ? chartJson.data.labels : series.data,
+            y: orientation === 'v' ? series.data : chartJson.data.labels,
+            name: series.label || `Series ${idx+1}`,
+            type: type,
+            orientation: orientation,
+            marker: { color: colors[idx % colors.length] }
+          };
+          traces.push(trace);
+        });
+      }
+
+      const layout = {
+        title: {
+          text: chartJson.options?.title || '',
+          font: { color: '#e5e7eb', size: 18 }
+        },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#d1d5db' },
+        xaxis: { gridcolor: 'rgba(255,255,255,0.1)', zerolinecolor: 'rgba(255,255,255,0.2)' },
+        yaxis: { gridcolor: 'rgba(255,255,255,0.1)', zerolinecolor: 'rgba(255,255,255,0.2)' },
+        margin: {
+          l: 150,
+          r: 50,
+          b: 150,
+          t: 50,
+          pad: 4
+        }
+      };
+
+      try {
+        Plotly.react('plotly-chart', traces, layout, {responsive: true, displayModeBar: false});
+      } catch(err) {
+        document.getElementById('plotly-chart').innerHTML=`<p class='text-red-400 text-center mt-20'>Error rendering chart: ${err}</p>`;
+      }
+    }
+
+    // Initial setup
+    document.addEventListener('DOMContentLoaded', () => {
+      runPendingQuery();
+    });
+  </script>
+</body>
+</html>

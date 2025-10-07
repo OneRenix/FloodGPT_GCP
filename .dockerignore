@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.python-version
+.idea
+.vscode
+*.ipynb
+*.png
+*.md

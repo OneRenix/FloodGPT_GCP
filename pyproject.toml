@@ -1,0 +1,20 @@
+[project]
+name = "floodgpt"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pandas",
+    "langchain-core",
+    "langchain-community",
+    "langchain-google-genai",
+    "langchain_experimental",
+    "google-generativeai",
+    "langgraph",
+    "python-dotenv",
+    "sqlalchemy",
+    "fastapi",
+    "uvicorn[standard]",
+    "ipykernel"
+]
