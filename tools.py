@@ -1,112 +1,128 @@
 import logging
 import pandas as pd
 import json
-import re
-from sqlalchemy import create_engine
+from google.cloud import firestore
 
 # LangChain and Google AI libraries
-from langchain_community.utilities import SQLDatabase
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 # The safe LLM factory function
 from llm_config import get_llm
 
-# --- 1. SQL GENERATION FUNCTION ---
-def generate_sql_query(question: str, db_schema: str) -> str:
-    """Takes a user question and schema, and generates a SQL query."""
-    logging.info("Generating SQL query...")
-    
+# --- 1. FIRESTORE QUERY PLAN GENERATION ---
+def generate_firestore_query_plan(question: str, schema: dict) -> dict:
+    """
+    Takes a user question and a schema of the Firestore collections
+    and generates a structured query plan in JSON format.
+    """
+    logging.info("Generating Firestore query plan...")
+
     prompt = ChatPromptTemplate.from_template(
-        """You are an expert SQL analyst. Your task is to convert a user's question into a syntactically correct SQLite query.
-        
-        Given the following database schema:
+        """
+        You are an expert Firestore database engineer. Your task is to convert a user's question into a structured query plan for Firestore.
+
+        Given the following Firestore schema:
         ---
         {schema}
         ---
-        
-        And the following critical rule for joining tables:
-        - When a query requires joining `flood_control_projects` and `cpes_projects`, you MUST use the `contractor_name_mapping` table.
-        
-        Based on the schema and rules, generate a SQL query to answer the user's question: "{question}"
-        """
-    )
-    
-    llm = get_llm(model_name="h-110", temperature=0)
-    chain = prompt | llm | StrOutputParser()
-    
-    sql_query = chain.invoke({"schema": db_schema, "question": question})
-    # The LLM sometimes wraps the query in markdown, so we clean it.
-    return sql_query.strip().replace("```sql", "").replace("```", "")
 
-# --- 2. SQL VALIDATION & CORRECTION FUNCTION ---
-def validate_and_correct_sql(sql_query: str, db_schema: str) -> dict:
-    """Validates a SQL query against the schema and corrects it if needed."""
-    logging.info("Validating and correcting SQL query...")
+        Generate a JSON object that represents the query plan to answer the user's question: "{question}"
 
-    prompt = ChatPromptTemplate.from_template(
-        """You are an AI assistant that validates and fixes SQL queries. Your task is to:
-        1. Check if the SQL query is valid for SQLite.
-        2. Ensure all table and column names are correctly spelled and exist in the schema.
-        3. If there are any issues, fix them. If you make a correction, set "valid" to false.
-        4. If no issues are found, return the original query and set "valid" to true.
-
-        Respond in a valid JSON format with the following structure. Only respond with the JSON:
+        The JSON object should have the following structure:
         {{
-            "valid": boolean,
-            "issues": string or null,
-            "corrected_query": string
+            "collection": "collection_name",
+            "select": ["field1", "field2"],
+            "where": [
+                {{
+                    "field": "field_name",
+                    "operator": "==",
+                    "value": "some_value"
+                }}
+            ],
+            "order_by": [
+                {{
+                    "field": "field_name",
+                    "direction": "DESCENDING"
+                }}
+            ],
+            "limit": 10
         }}
-        
-        ===Database schema:
-        {schema}
-        ===Generated SQL query:
-        {sql_query}
+
+        - "collection" is the name of the collection to query.
+        - "select" is a list of fields to include in the result. If empty, all fields are returned.
+        - "where" is a list of conditions to filter the documents.
+        - "order_by" is a list of fields to sort the results by.
+        - "limit" is the maximum number of documents to return.
+
+        Only respond with the JSON object.
         """
     )
-    
-    llm = get_llm(model_name="h-110", temperature=0)
+
+    llm = get_llm(model_name="gemini-1.5-flash", temperature=0)
     chain = prompt | llm | StrOutputParser()
 
-    response_str = chain.invoke({"schema": db_schema, "sql_query": sql_query})
+    response_str = chain.invoke({"schema": json.dumps(schema, indent=2), "question": question})
     clean_response_str = response_str.strip().replace('`json', '').replace('`', '')
     
     try:
-        validation_json = json.loads(clean_response_str)
-        
-        # Add a final, robust cleanup step to remove any junk text before the SELECT statement.
-        original_corrected_query = validation_json.get("corrected_query", "")
-        
-        # Find the position of the first 'SELECT' (case-insensitive)
-        select_pos = original_corrected_query.upper().find("SELECT")
-        
-        if select_pos != -1:
-            # If 'SELECT' is found, slice the string from that point
-            cleaned_query = original_corrected_query[select_pos:]
-            validation_json["corrected_query"] = cleaned_query
-        else:
-            # If no 'SELECT' is found, the query is likely invalid
-            validation_json["valid"] = False
-            validation_json["issues"] = "Query does not contain a SELECT statement."
-            
-        return validation_json
-        
+        query_plan = json.loads(clean_response_str)
+        return query_plan
     except json.JSONDecodeError:
-        return {"valid": False, "issues": "Failed to get a valid JSON response from the validation LLM.", "corrected_query": sql_query}
+        logging.error(f"Failed to decode JSON from query plan response: {clean_response_str}")
+        return {{}}
 
-# --- 3. SQL EXECUTION FUNCTION ---
-def execute_sql_query(sql_query: str) -> dict:
-    """Executes a validated SQL query and returns the results as a Pandas DataFrame."""
-    logging.info(f"Executing validated SQL query:\n{sql_query}")
-    db_uri = "sqlite:///db/analytics.db"
-    
+# --- 2. FIRESTORE QUERY EXECUTION ---
+def execute_firestore_query(query_plan: dict) -> dict:
+    """
+    Executes a Firestore query based on the provided query plan
+    and returns the results as a Pandas DataFrame.
+    """
+    logging.info(f"Executing Firestore query plan: {query_plan}")
+
     try:
-        engine = create_engine(db_uri)
-        df = pd.read_sql(sql_query, engine)
+        db = firestore.Client()
+        collection_name = query_plan.get("collection")
+        if not collection_name:
+            raise ValueError("The 'collection' field is missing from the query plan.")
+
+        query = db.collection(collection_name)
+
+        # Apply where clauses
+        if "where" in query_plan and query_plan["where"]:
+            for condition in query_plan["where"]:
+                query = query.where(condition["field"], condition["operator"], condition["value"])
+
+        # Apply order_by clauses
+        if "order_by" in query_plan and query_plan["order_by"]:
+            for order in query_plan["order_by"]:
+                direction = firestore.Query.DESCENDING if order.get("direction") == "DESCENDING" else firestore.Query.ASCENDING
+                query = query.order_by(order["field"], direction=direction)
+
+        # Apply limit
+        if "limit" in query_plan:
+            query = query.limit(query_plan["limit"])
+
+        # Execute the query
+        docs = query.stream()
+        data = [doc.to_dict() for doc in docs]
+
+        if not data:
+            return {"sql_dataframe": pd.DataFrame()}
+
+        # Convert to DataFrame
+        df = pd.DataFrame(data)
+
+        # Apply select fields
+        if "select" in query_plan and query_plan["select"]:
+            df = df[query_plan["select"]]
+
         return {"sql_dataframe": df}
+
     except Exception as e:
-        logging.error(f"SQL execution failed: {e}")
+        logging.error(f"Firestore query execution failed: {e}")
         return {"sql_dataframe": pd.DataFrame(), "error": str(e)}
+
 
 # --- 4. VISUALIZATION RECOMMENDATION FUNCTION ---
 
@@ -140,7 +156,7 @@ def recommend_visualization(user_question: str, sql_result_df: pd.DataFrame) -> 
         data_summary = f"Columns: {', '.join(sql_result_df.columns)}\n\n{sql_result_df.head(3).to_string()}"
 
         prompt = ChatPromptTemplate.from_template(VISUALIZATION_PROMPT)
-        viz_llm = get_llm(model_name="gemini-2.5-flash", temperature=0)
+        viz_llm = get_llm(model_name="gemini-1.5-flash", temperature=0)
         chain = prompt | viz_llm | StrOutputParser()
         
         response = chain.invoke({"question": user_question, "data_summary": data_summary})
@@ -175,7 +191,7 @@ def generate_insight_from_data(question: str, df: pd.DataFrame) -> str:
         """
     )
 
-    llm = get_llm(model_name="gemini-2.5-flash", temperature=0.7)
+    llm = get_llm(model_name="gemini-1.5-flash", temperature=0.7)
     chain = prompt | llm | StrOutputParser()
 
     data_summary = f"Columns: {', '.join(df.columns)}\n\n{df.head().to_string()}"

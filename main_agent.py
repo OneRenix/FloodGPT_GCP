@@ -8,10 +8,10 @@ import pandas as pd
 from langgraph.graph import StateGraph, END
 
 # Import your specialist functions and classes
-from tools import generate_sql_query, validate_and_correct_sql, execute_sql_query, recommend_visualization, generate_insight_from_data
+from tools import generate_firestore_query_plan, execute_firestore_query, recommend_visualization, generate_insight_from_data
 from formatter import DataFormatter
 from llm_config import get_llm
-from langchain_community.utilities import SQLDatabase
+from schema import FIRESTORE_SCHEMA
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,12 +20,9 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # --- 1. Define the State for our Graph ---
-# This is the "memory" that is passed between each step of the agent.
 class AgentState(TypedDict):
     question: str
-    db_schema: str
-    generated_sql: str
-    validated_sql: str
+    firestore_query_plan: dict
     sql_dataframe: pd.DataFrame
     visualization: str
     formatted_data_for_visualization: dict
@@ -35,42 +32,19 @@ class AgentState(TypedDict):
 # --- 2. Create Instances of Our Tools ---
 helper_llm = get_llm(model_name="gemini-1.5-flash", temperature=0)
 formatter = DataFormatter(llm=helper_llm)
-db = SQLDatabase.from_uri("sqlite:///db/analytics.db")
 
 # --- 3. Define the Nodes for our Graph ---
-# Each node is a function that performs a specific action.
 
-def insight_node(state: AgentState):
-    """Generates an insight from the data."""
-    logging.info("---NODE: GENERATING INSIGHT---")
-    if state.get("error") or state.get("sql_dataframe") is None or state.get("sql_dataframe").empty:
-        logging.warning("Skipping insight generation due to error or no data.")
-        return {"insight": "No insight available."}
-    
-    insight = generate_insight_from_data(state['question'], state['sql_dataframe'])
-    return {"insight": insight}
+def firestore_query_plan_node(state: AgentState):
+    """Generates a structured query plan for Firestore."""
+    logging.info("---NODE: GENERATING FIRESTORE QUERY PLAN---")
+    query_plan = generate_firestore_query_plan(state['question'], FIRESTORE_SCHEMA)
+    return {"firestore_query_plan": query_plan}
 
-def sql_generation_node(state: AgentState):
-    """Generates the initial SQL query from the user's question."""
-    logging.info("---NODE: GENERATING SQL---")
-    db_schema = db.get_table_info()
-    query = generate_sql_query(state['question'], db_schema)
-    return {"generated_sql": query, "db_schema": db_schema}
-
-def sql_validation_node(state: AgentState):
-    """Validates and corrects the generated SQL query."""
-    logging.info("---NODE: VALIDATING SQL---")
-    validation_result = validate_and_correct_sql(state['generated_sql'], state['db_schema'])
-    if validation_result.get("valid"):
-        return {"validated_sql": state['generated_sql']}
-    else:
-        logging.warning(f"SQL was invalid. Issues: {validation_result.get('issues')}. Using corrected query.")
-        return {"validated_sql": validation_result.get("corrected_query")}
-
-def sql_execution_node(state: AgentState):
-    """Executes the validated SQL query against the database."""
-    logging.info("---NODE: EXECUTING SQL---")
-    execution_result = execute_sql_query(state['validated_sql'])
+def firestore_execution_node(state: AgentState):
+    """Executes the Firestore query plan."""
+    logging.info("---NODE: EXECUTING FIRESTORE QUERY---")
+    execution_result = execute_firestore_query(state['firestore_query_plan'])
     if "error" in execution_result:
         return {"error": execution_result["error"], "sql_dataframe": pd.DataFrame()}
     return {"sql_dataframe": execution_result["sql_dataframe"]}
@@ -97,29 +71,37 @@ def formatter_node(state: AgentState):
     formatted_data_dict = formatter.format_data_for_visualization(state)
     return {"formatted_data_for_visualization": formatted_data_dict}
 
+def insight_node(state: AgentState):
+    """Generates an insight from the data."""
+    logging.info("---NODE: GENERATING INSIGHT---")
+    if state.get("error") or state.get("sql_dataframe") is None or state.get("sql_dataframe").empty:
+        logging.warning("Skipping insight generation due to error or no data.")
+        return {"insight": "No insight available."}
+    
+    insight = generate_insight_from_data(state['question'], state['sql_dataframe'])
+    return {"insight": insight}
+
 # --- 4. Build the Graph ---
 workflow = StateGraph(AgentState)
 
 # Add the nodes
-workflow.add_node("generate_sql", sql_generation_node)
-workflow.add_node("validate_sql", sql_validation_node)
-workflow.add_node("execute_sql", sql_execution_node)
+workflow.add_node("generate_firestore_plan", firestore_query_plan_node)
+workflow.add_node("execute_firestore_query", firestore_execution_node)
 workflow.add_node("visualizer", visualizer_node)
 workflow.add_node("formatter", formatter_node)
 workflow.add_node("insight", insight_node)
 
 # Define the workflow sequence
-workflow.set_entry_point("generate_sql")
-workflow.add_edge("generate_sql", "validate_sql")
-workflow.add_edge("validate_sql", "execute_sql")
-workflow.add_edge("execute_sql", "visualizer")
+workflow.set_entry_point("generate_firestore_plan")
+workflow.add_edge("generate_firestore_plan", "execute_firestore_query")
+workflow.add_edge("execute_firestore_query", "visualizer")
 workflow.add_edge("visualizer", "formatter")
 workflow.add_edge("formatter", "insight")
 workflow.add_edge("insight", END)
 
 # Compile the graph into a runnable application
 app = workflow.compile()
-logging.info("LangGraph app with SQL validation compiled.")
+logging.info("LangGraph app with Firestore integration compiled.")
 
 # --- 5. Main Execution Block (for command-line testing) ---
 def main():
@@ -136,15 +118,15 @@ def main():
     if final_state.get("error"):
         print(f"An error occurred during execution: {final_state['error']}")
 
+    print("## Firestore Query Plan:\n")
+    print(json.dumps(final_state.get("firestore_query_plan"), indent=2))
+    print("\n" + "-"*50 + "\n")
+
     print("## Data Result:\n")
     if final_state.get("sql_dataframe") is not None and not final_state["sql_dataframe"].empty:
         print(final_state["sql_dataframe"].to_string())
     else:
         print("No data was returned from the query.")
-    print("\n" + "-"*50 + "\n")
-
-    print("## Validated SQL Query:\n")
-    print(final_state.get("validated_sql", "N/A"))
     print("\n" + "-"*50 + "\n")
 
     print("## Visualization Recommendation:\n")
